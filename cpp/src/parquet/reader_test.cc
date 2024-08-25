@@ -83,6 +83,10 @@ std::string hadoop_lz4_compressed_larger() {
   return data_file("hadoop_lz4_compressed_larger.parquet");
 }
 
+std::string hadoop_lz4_compressed_block_split() {
+  return data_file("hadoop_lz4_compressed_block_split.parquet");
+}
+
 std::string non_hadoop_lz4_compressed() {
   return data_file("non_hadoop_lz4_compressed.parquet");
 }
@@ -1539,6 +1543,37 @@ std::vector<TestCodecParam> test_codec_params{
 
 INSTANTIATE_TEST_SUITE_P(Lz4CodecTests, TestCodec, ::testing::ValuesIn(test_codec_params),
                          testing::PrintToStringParamName());
+
+TEST(Lz4CodecTests, TestMultiBlocksCompressed) {
+  ReaderProperties reader_props;
+  auto file_reader = ParquetFileReader::OpenFile(hadoop_lz4_compressed_block_split(),
+                                                 /*memory_map=*/false, reader_props);
+  auto metadata_ptr = file_reader->metadata();
+  ASSERT_EQ(1, metadata_ptr->num_row_groups());
+  ASSERT_EQ(1, metadata_ptr->num_columns());
+  auto row_group = file_reader->RowGroup(0);
+  ASSERT_EQ(65536, row_group->metadata()->num_rows());
+
+  const int64_t kNumRows = 65536;
+
+  // column 0 ("a")
+  auto col = checked_pointer_cast<ByteArrayReader>(row_group->Column(0));
+  std::vector<ByteArray> values(kNumRows);
+  int64_t total_values = 0;
+  int64_t values_read = 0;
+  do {
+    values_read = 0;
+    col->ReadBatch(kNumRows, nullptr, nullptr, values.data() + total_values,
+                   &values_read);
+    total_values += values_read;
+  } while (values_read != 0);
+  ASSERT_EQ(kNumRows, total_values);
+  ASSERT_EQ(values[0], ByteArray("c4123fba-3382-4dac-97a5-40cf2cb3650f"));
+  ASSERT_EQ(values[1], ByteArray("559a81cd-c1fe-4d2d-b4d0-c49ea20b63d2"));
+  ASSERT_EQ(values[65536 - 2], ByteArray("ece89f3a-1934-4d70-8859-118c856ad5e9"));
+  ASSERT_EQ(values[65536 - 1], ByteArray("9e3e6e2e-3801-4e6e-a092-0fef9f3651ca"));
+}
+
 #endif  // ARROW_WITH_LZ4
 
 // Test reading a data file with a ColumnChunk contains more than
